@@ -3,6 +3,19 @@ const pino = require("pino");
 const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
+const express = require("express");
+
+// 🌐 إعداد سيرفر Express لإبقاء المنفذ مفتوحاً ومنع إغلاق السيرفر في Render
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get("/", (req, res) => {
+  res.send("👑 DARK BOT IS ALIVE & RUNNING 24/7 👑");
+});
+
+app.listen(PORT, () => {
+  console.log(`🌐 Web server is running on port: ${PORT}`);
+});
 
 const SUPREME_OWNER = "249112520567"; // تم التثبيت على رقمك الصحيح والأساسي 👑
 const BOT_NAME = "DARK";
@@ -87,7 +100,6 @@ async function startBot() {
         console.log(`\n👑 نظام ربط DARK BOT المطور عبر الكود 👑`);
         let phoneNumber = await question('📝 أدخل رقم هاتف البوت مع رمز الدولة (مثال: 249112520567): ');
         phoneNumber = phoneNumber.replace(/[^0-9]/g, '');
-
         if (!phoneNumber) {
             console.log('❌ رقم غير صحيح! أعد تشغيل البوت واكتب الرقم بشكل صحيح.');
             process.exit(0);
@@ -164,14 +176,12 @@ async function startBot() {
                                     'audioMessage': { name: 'ريكورد / صوت 🎵', stream: 'audio' },
                                     'videoMessage': { name: 'فيديو 🎥', stream: 'video' }
                                 };
-
                                 const mapped = typeMap[mediaTypeKey];
                                 if (mapped) {
                                     try {
                                         const stream = await downloadContentFromMessage(mediaMessage, mapped.stream);
                                         let buffer = Buffer.from([]);
                                         for await (const chunk of stream) { buffer = Buffer.concat([buffer, chunk]); }
-
                                         const captionText = `🗑️ *[ رادار الحذف: ${mapped.name} ]*\n\n» العضو: @${senderNum}\n» قام بحذف الميديا المرفقة أعلاه الحين!\n\n${footer}`;
 
                                         if (mediaTypeKey === 'imageMessage') {
@@ -220,7 +230,6 @@ async function startBot() {
 
             const args = body.split(/ +/);
             const lookupName = args.shift().toLowerCase();
-
             const rawSender = mek.key.participant || mek.key.remoteJid || '';
             const senderNumber = rawSender.split("@")[0].replace(/[^0-9]/g, "");
 
@@ -236,7 +245,6 @@ async function startBot() {
             if (command) {
                 // الخدعة البرمجية: جعل أي أدمن مضاف في السيستم بمثابة المالك للأوامر القديمة والجديدة فوراً
                 const hasPermission = isOwner || isAdmin;
-
                 await command.execute(sock, mek, args, {
                     BOT_NAME,
                     lookupName,
@@ -248,5 +256,6 @@ async function startBot() {
         } catch (e) { console.error(e); }
     });
 }
+
 startBot();
 
