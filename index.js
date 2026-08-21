@@ -107,6 +107,7 @@ async function startBot() {
         if (update.connection === "close") startBot();
     });
 
+    // 1️⃣ استقبال الرسائل العادية وتخزينها لكشف الحذف والتعديل
     sock.ev.on("messages.upsert", async (chatUpdate) => {
         try {
             if (chatUpdate.type !== "notify") return;
@@ -116,37 +117,6 @@ async function startBot() {
             const msgId = mek.key.id;
             const type = Object.keys(mek.message)[0];
 
-            // 1. معالجة التعديل الحية فور وصولها كـ protocolMessage (Type 14)
-            if (type === 'protocolMessage' && mek.message.protocolMessage?.type === 14) {
-                if (isRadarOn() === "on" && !mek.key.fromMe) {
-                    const targetId = mek.message.protocolMessage.key?.id;
-                    const oldMsgData = msgStorage.get(targetId);
-
-                    const editedProto = mek.message.protocolMessage.editedMessage;
-                    const newText = editedProto?.conversation || 
-                                    editedProto?.extendedTextMessage?.text || 
-                                    editedProto?.imageMessage?.caption || 
-                                    editedProto?.videoMessage?.caption || '';
-
-                    if (oldMsgData && oldMsgData.text && newText && oldMsgData.text !== newText) {
-                        const flags = ["🇲🇨","🇯🇵","🇸🇩","🇷🇺","🇨🇦","🇩🇪","🇰🇵","🇺🇸"];
-                        const randomFlag = flags[Math.floor(Math.random() * flags.length)];
-                        const footer = `> |  Ⓗ DARK ZENIN ᴏғғ ${randomFlag}`;
-                        const myBotPrivate = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-                        const senderNum = oldMsgData.sender.split("@")[0];
-
-                        const alertMsg = `✏️ *[ رادار قفش التعديل ]*\n\n» العضو: @${senderNum}\n\n❌ النص القديم:\n"${oldMsgData.text}"\n\n✅ النص الجديد:\n"${newText}"\n\n${footer}`;
-                        
-                        await sock.sendMessage(myBotPrivate, { text: alertMsg, mentions: [oldMsgData.sender] });
-                        
-                        // تحديث النص في الذاكرة بالجديد
-                        msgStorage.set(targetId, { ...oldMsgData, text: newText });
-                    }
-                }
-                return; // لا تكمل تنفيذ الأوامر لرسائل البروتوكول
-            }
-
-            // 2. استخراج النص للرسائل العادية
             let extractedText = type === 'conversation' ? mek.message.conversation :
                                (type === 'extendedTextMessage' ? mek.message.extendedTextMessage?.text :
                                (mek.message[type]?.caption || ''));
@@ -253,6 +223,42 @@ async function startBot() {
                 });
             }
         } catch (e) { console.error(e); }
+    });
+
+    // 2️⃣ رادار قفش التعديل الحقيقي المباشر من حدث updates
+    sock.ev.on("messages.update", async (updates) => {
+        try {
+            if (isRadarOn() !== "on") return;
+
+            for (const update of updates) {
+                const proto = update.update?.message?.protocolMessage;
+                // التأكد من أن التحديث هو حدث تعديل (Type 14)
+                if (proto?.type === 14 || update.update?.editedMessage) {
+                    const targetId = proto?.key?.id || update.key.id;
+                    const oldData = msgStorage.get(targetId);
+
+                    const editedProto = proto?.editedMessage || update.update?.editedMessage?.message;
+                    const newText = editedProto?.conversation || 
+                                    editedProto?.extendedTextMessage?.text || 
+                                    editedProto?.imageMessage?.caption || 
+                                    editedProto?.videoMessage?.caption || '';
+
+                    if (oldData && oldData.text && newText && oldData.text !== newText) {
+                        const flags = ["🇲🇨","🇯🇵","🇸🇩","🇷🇺","🇨🇦","🇩🇪","🇰🇵","🇺🇸"];
+                        const randomFlag = flags[Math.floor(Math.random() * flags.length)];
+                        const footer = `> |  Ⓗ DARK ZENIN ᴏғғ ${randomFlag}`;
+                        const myBotPrivate = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                        const senderNum = oldData.sender.split("@")[0];
+
+                        const alertMsg = `✏️ *[ رادار قفش التعديل ]*\n\n» العضو: @${senderNum}\n\n❌ النص القديم:\n"${oldData.text}"\n\n✅ النص الجديد:\n"${newText}"\n\n${footer}`;
+
+                        await sock.sendMessage(myBotPrivate, { text: alertMsg, mentions: [oldData.sender] });
+                        // تحديث النص في الذاكرة لمنع التكرار
+                        msgStorage.set(targetId, { ...oldData, text: newText });
+                    }
+                }
+            }
+        } catch (e) { console.error("خطأ رادار التعديل:", e.message); }
     });
 }
 
