@@ -146,6 +146,7 @@ async function startBot() {
                 const footer = `> |  Ⓗ DARK ZENIN ᴏғғ ${randomFlag}`;
                 const myBotPrivate = sock.user.id.split(':')[0] + '@s.whatsapp.net';
 
+                // 🗑️ 1. رادار كشف الرسائل والميديا المحذوفة
                 if (type === 'protocolMessage' && mek.message.protocolMessage?.type === 0) {
                     const deletedId = mek.message.protocolMessage.key.id;
                     const oldMsg = msgStorage.get(deletedId);
@@ -202,14 +203,23 @@ async function startBot() {
                     }
                 }
 
+                // ✏️ 2. رادار قفش التعديل المعزز والذكي
                 if (type === 'protocolMessage' && mek.message.protocolMessage?.type === 14) {
                     const editedId = mek.message.protocolMessage.key.id;
                     const oldMsg = msgStorage.get(editedId);
-                    const newText = mek.message.protocolMessage.editedMessage?.extendedTextMessage?.text || mek.message.protocolMessage.editedMessage?.conversation || '';
+                    
+                    const editedProto = mek.message.protocolMessage.editedMessage;
+                    const newText = editedProto?.conversation || 
+                                    editedProto?.extendedTextMessage?.text || 
+                                    editedProto?.imageMessage?.caption || 
+                                    editedProto?.videoMessage?.caption || '';
 
                     if (oldMsg && oldMsg.message && newText) {
                         const oldType = Object.keys(oldMsg.message)[0];
-                        let oldText = oldType === 'conversation' ? oldMsg.message.conversation : (oldType === 'extendedTextMessage' ? oldMsg.message.extendedTextMessage.text : '');
+                        let oldText = oldType === 'conversation' ? oldMsg.message.conversation : 
+                                     (oldType === 'extendedTextMessage' ? oldMsg.message.extendedTextMessage.text : 
+                                     (oldMsg.message[oldType]?.caption || ''));
+                                     
                         const sender = oldMsg.key.participant || oldMsg.key.remoteJid;
                         const senderNum = sender.split("@")[0];
 
@@ -236,19 +246,18 @@ async function startBot() {
             // 👑 جدار فحص رتب الصلاحيات المطور 👑
             const currentAdmins = getAllowedAdmins();
             const isOwner = (senderNumber === SUPREME_OWNER || mek.key.fromMe === true);
-            const isAdmin = currentAdmins.includes(senderNumber); // يتحقق تلقائياً إذا كان أدمن مضاف بالملف
+            const isAdmin = currentAdmins.includes(senderNumber);
 
             const currentMode = getBotMode();
             if (currentMode === "self" && !isAdmin && !isOwner) return;
 
             const command = commands.get(lookupName) || aliasesMap.get(lookupName);
             if (command) {
-                // الخدعة البرمجية: جعل أي أدمن مضاف في السيستم بمثابة المالك للأوامر القديمة والجديدة فوراً
                 const hasPermission = isOwner || isAdmin;
                 await command.execute(sock, mek, args, {
                     BOT_NAME,
                     lookupName,
-                    isOwner: hasPermission, // تمرير الصلاحية الموحدة لفك تشفير حماية الملفات القديمة
+                    isOwner: hasPermission,
                     isAdmin,
                     currentAdmins
                 });
