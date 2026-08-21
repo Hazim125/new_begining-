@@ -123,6 +123,7 @@ async function startBot() {
         if (update.connection === "close") startBot();
     });
 
+    // 📝 1. معالج استقبال وتخزين الرسائل + رادار الحذف
     sock.ev.on("messages.upsert", async (chatUpdate) => {
         try {
             if (chatUpdate.type !== "notify") return;
@@ -132,6 +133,7 @@ async function startBot() {
             const from = mek.key.remoteJid;
             const msgId = mek.key.id;
 
+            // تخزين الرسالة في الذاكرة للرجوع إليها عند الحذف أو التعديل
             msgStorage.set(msgId, mek);
             if (msgStorage.size > 3000) {
                 const firstKey = msgStorage.keys().next().value;
@@ -146,7 +148,7 @@ async function startBot() {
                 const footer = `> |  Ⓗ DARK ZENIN ᴏғғ ${randomFlag}`;
                 const myBotPrivate = sock.user.id.split(':')[0] + '@s.whatsapp.net';
 
-                // 🗑️ 1. رادار كشف الرسائل والميديا المحذوفة
+                // 🗑️ رادار كشف الرسائل والميديا المحذوفة
                 if (type === 'protocolMessage' && mek.message.protocolMessage?.type === 0) {
                     const deletedId = mek.message.protocolMessage.key.id;
                     const oldMsg = msgStorage.get(deletedId);
@@ -202,33 +204,6 @@ async function startBot() {
                         }
                     }
                 }
-
-                // ✏️ 2. رادار قفش التعديل المعزز والذكي
-                if (type === 'protocolMessage' && mek.message.protocolMessage?.type === 14) {
-                    const editedId = mek.message.protocolMessage.key.id;
-                    const oldMsg = msgStorage.get(editedId);
-                    
-                    const editedProto = mek.message.protocolMessage.editedMessage;
-                    const newText = editedProto?.conversation || 
-                                    editedProto?.extendedTextMessage?.text || 
-                                    editedProto?.imageMessage?.caption || 
-                                    editedProto?.videoMessage?.caption || '';
-
-                    if (oldMsg && oldMsg.message && newText) {
-                        const oldType = Object.keys(oldMsg.message)[0];
-                        let oldText = oldType === 'conversation' ? oldMsg.message.conversation : 
-                                     (oldType === 'extendedTextMessage' ? oldMsg.message.extendedTextMessage.text : 
-                                     (oldMsg.message[oldType]?.caption || ''));
-                                     
-                        const sender = oldMsg.key.participant || oldMsg.key.remoteJid;
-                        const senderNum = sender.split("@")[0];
-
-                        if (oldText && oldText !== newText) {
-                            const alertMsg = `✏️ *[ رادار قفش التعديل ]*\n\n» العضو: @${senderNum}\n\n❌ النص القديم:\n"${oldText}"\n\n✅ النص الجديد:\n"${newText}"\n\n${footer}`;
-                            await sock.sendMessage(myBotPrivate, { text: alertMsg, mentions: [sender] });
-                        }
-                    }
-                }
             }
 
             let body = '';
@@ -263,6 +238,47 @@ async function startBot() {
                 });
             }
         } catch (e) { console.error(e); }
+    });
+
+    // ✏️ 2. معالج حدث التعديلات المباشر (messages.update) المخصص لكشف تعديل الرسائل بدقة
+    sock.ev.on("messages.update", async (updates) => {
+        try {
+            if (isRadarOn() !== "on") return;
+
+            for (const update of updates) {
+                const isEdited = update.update?.message?.protocolMessage?.type === 14 || update.update?.editedMessage;
+                if (isEdited) {
+                    const editedId = update.key.id;
+                    const oldMsg = msgStorage.get(editedId);
+
+                    const editedProto = update.update?.message?.protocolMessage?.editedMessage || update.update?.editedMessage?.message;
+                    const newText = editedProto?.conversation || 
+                                    editedProto?.extendedTextMessage?.text || 
+                                    editedProto?.imageMessage?.caption || 
+                                    editedProto?.videoMessage?.caption || '';
+
+                    if (oldMsg && oldMsg.message && newText) {
+                        const oldType = Object.keys(oldMsg.message)[0];
+                        let oldText = oldType === 'conversation' ? oldMsg.message.conversation : 
+                                     (oldType === 'extendedTextMessage' ? oldMsg.message.extendedTextMessage.text : 
+                                     (oldMsg.message[oldType]?.caption || ''));
+
+                        const sender = oldMsg.key.participant || oldMsg.key.remoteJid;
+                        const senderNum = sender.split("@")[0];
+
+                        if (oldText && oldText !== newText) {
+                            const flags = ["🇲🇨","🇯🇵","🇸🇩","🇷🇺","🇨🇦","🇩🇪","🇰🇵","🇺🇸"];
+                            const randomFlag = flags[Math.floor(Math.random() * flags.length)];
+                            const footer = `> |  Ⓗ DARK ZENIN ᴏғғ ${randomFlag}`;
+                            const myBotPrivate = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+
+                            const alertMsg = `✏️ *[ رادار قفش التعديل ]*\n\n» العضو: @${senderNum}\n\n❌ النص القديم:\n"${oldText}"\n\n✅ النص الجديد:\n"${newText}"\n\n${footer}`;
+                            await sock.sendMessage(myBotPrivate, { text: alertMsg, mentions: [sender] });
+                        }
+                    }
+                }
+            }
+        } catch (e) { console.error("خطأ في رادار التعديل:", e.message); }
     });
 }
 
