@@ -17,37 +17,29 @@ app.listen(PORT, () => {
   console.log(`🌐 Web server is running on port: ${PORT}`);
 });
 
-const SUPREME_OWNER = "249112520567"; // تم التثبيت على رقمك الصحيح والأساسي 👑
+const SUPREME_OWNER = "249112520567"; 
 const BOT_NAME = "DARK";
 
 const commands = new Map();
 const aliasesMap = new Map();
 const msgStorage = new Map();
 
-// إعداد واجهة القراءة من التيرمنال لإدخال الرقم
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
-// مسار ملف حفظ الإداريين المشترك
 const adminsPath = path.join(__dirname, "admins.json");
 
-// دالة جلب قائمة الإداريين المشتركة لتحديث الصلاحيات تلقائياً بجميع الأوامر
 function getAllowedAdmins() {
     let allowed = [SUPREME_OWNER];
     if (fs.existsSync(adminsPath)) {
         try {
             const fileData = JSON.parse(fs.readFileSync(adminsPath, "utf8"));
-            if (Array.isArray(fileData)) {
-                allowed = fileData;
-            }
+            if (Array.isArray(fileData)) allowed = fileData;
         } catch (e) {
             allowed = [SUPREME_OWNER];
         }
     }
-    // التأكد دائماً أن رقمك الأساسي موجود لحمايتك من الحذف بالخطأ
-    if (!allowed.includes(SUPREME_OWNER)) {
-        allowed.push(SUPREME_OWNER);
-    }
+    if (!allowed.includes(SUPREME_OWNER)) allowed.push(SUPREME_OWNER);
     return allowed;
 }
 
@@ -89,31 +81,24 @@ async function startBot() {
 
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: false, // معطل لأننا نستخدم كود الربط بالرقم الحين
+        printQRInTerminal: false,
         logger: pino({ level: "silent" }),
         version,
         browser: ["Ubuntu", "Chrome", "20.0.0.4"]
     });
 
-    // 🔑 نظام جلب كود الربط (Pairing Code) بالرقم تلقائياً إذا لم تكن مسجلاً
     if (!sock.authState.creds.registered) {
         console.log(`\n👑 نظام ربط DARK BOT المطور عبر الكود 👑`);
-        let phoneNumber = await question('📝 أدخل رقم هاتف البوت مع رمز الدولة (مثال: 249112520567): ');
+        let phoneNumber = await question('📝 أدخل رقم هاتف البوت مع رمز الدولة: ');
         phoneNumber = phoneNumber.replace(/[^0-9]/g, '');
-        if (!phoneNumber) {
-            console.log('❌ رقم غير صحيح! أعد تشغيل البوت واكتب الرقم بشكل صحيح.');
-            process.exit(0);
-        }
+        if (!phoneNumber) process.exit(0);
 
         setTimeout(async () => {
             try {
                 let code = await sock.requestPairingCode(phoneNumber);
                 code = code?.match(/.{1,4}/g)?.join("-") || code;
-                console.log(`\n🔥 كود الربط الخاص بك هو: 【 ${code} 】`);
-                console.log(`📌 افتح واتساب -> الأجهزة المرتبطة -> ربط برقم الهاتف وضعه الحين.\n`);
-            } catch (err) {
-                console.log('❌ خطأ أثناء طلب كود الربط:', err.message);
-            }
+                console.log(`\n🔥 كود الربط الخاص بك هو: 【 ${code} 】\n`);
+            } catch (err) { console.log('❌ خطأ في الكود:', err.message); }
         }, 3000);
     }
 
@@ -123,24 +108,31 @@ async function startBot() {
         if (update.connection === "close") startBot();
     });
 
-    // 📝 1. معالج استقبال وتخزين الرسائل + رادار الحذف
+    // 📩 استقبال الرسائل وتخزين الكائن كاملاً
     sock.ev.on("messages.upsert", async (chatUpdate) => {
         try {
             if (chatUpdate.type !== "notify") return;
             const mek = chatUpdate.messages[0];
             if (!mek.message) return;
 
-            const from = mek.key.remoteJid;
             const msgId = mek.key.id;
+            const type = Object.keys(mek.message)[0];
 
-            // تخزين الرسالة في الذاكرة للرجوع إليها عند الحذف أو التعديل
-            msgStorage.set(msgId, mek);
-            if (msgStorage.size > 3000) {
+            let extractedText = type === 'conversation' ? mek.message.conversation :
+                               (type === 'extendedTextMessage' ? mek.message.extendedTextMessage?.text :
+                               (mek.message[type]?.caption || ''));
+
+            // حفظ الرسالة كاملة في الذاكرة
+            msgStorage.set(msgId, {
+                text: extractedText,
+                sender: mek.key.participant || mek.key.remoteJid,
+                raw: mek
+            });
+
+            if (msgStorage.size > 4000) {
                 const firstKey = msgStorage.keys().next().value;
                 msgStorage.delete(firstKey);
             }
-
-            const type = Object.keys(mek.message)[0];
 
             if (isRadarOn() === "on" && !mek.key.fromMe) {
                 const flags = ["🇲🇨","🇯🇵","🇸🇩","🇷🇺","🇨🇦","🇩🇪","🇰🇵","🇺🇸"];
@@ -151,28 +143,26 @@ async function startBot() {
                 // 🗑️ رادار كشف الرسائل والميديا المحذوفة
                 if (type === 'protocolMessage' && mek.message.protocolMessage?.type === 0) {
                     const deletedId = mek.message.protocolMessage.key.id;
-                    const oldMsg = msgStorage.get(deletedId);
+                    const oldMsgData = msgStorage.get(deletedId);
 
-                    if (oldMsg && oldMsg.message) {
-                        const oldType = Object.keys(oldMsg.message)[0];
-                        const sender = oldMsg.key.participant || oldMsg.key.remoteJid;
-                        const senderNum = sender.split("@")[0];
-
-                        let oldText = oldType === 'conversation' ? oldMsg.message.conversation : (oldType === 'extendedTextMessage' ? oldMsg.message.extendedTextMessage.text : '');
-
-                        if (oldText) {
-                            const alertMsg = `🗑️ *[ رادار الحذف: نص ]*\n\n» العضو: @${senderNum}\n» حذف كلامه المكتوب:\n\n💬 "${oldText}"\n\n${footer}`;
-                            await sock.sendMessage(myBotPrivate, { text: alertMsg, mentions: [sender] });
-                        } else {
-                            let mediaMessage = oldMsg.message[oldType];
+                    if (oldMsgData) {
+                        const senderNum = oldMsgData.sender.split("@")[0];
+                        
+                        if (oldMsgData.text) {
+                            const alertMsg = `🗑️ *[ رادار الحذف: نص ]*\n\n» العضو: @${senderNum}\n» حذف كلامه المكتوب:\n\n💬 "${oldMsgData.text}"\n\n${footer}`;
+                            await sock.sendMessage(myBotPrivate, { text: alertMsg, mentions: [oldMsgData.sender] });
+                        } else if (oldMsgData.raw?.message) {
+                            const oldRaw = oldMsgData.raw.message;
+                            const oldType = Object.keys(oldRaw)[0];
+                            let mediaMessage = oldRaw[oldType];
                             let mediaTypeKey = oldType;
 
                             if (oldType === 'viewOnceMessage' || oldType === 'viewOnceMessageV2') {
-                                mediaMessage = oldMsg.message[oldType].message[Object.keys(oldMsg.message[oldType].message)[0]];
-                                mediaTypeKey = Object.keys(oldMsg.message[oldType].message)[0];
+                                mediaMessage = oldRaw[oldType].message[Object.keys(oldRaw[oldType].message)[0]];
+                                mediaTypeKey = Object.keys(oldRaw[oldType].message)[0];
                             }
 
-                            if (mediaMessage && (mediaTypeKey.includes('Message'))) {
+                            if (mediaMessage && mediaTypeKey.includes('Message')) {
                                 const typeMap = {
                                     'imageMessage': { name: 'صورة 📸', stream: 'image' },
                                     'stickerMessage': { name: 'ملصق 🎭', stream: 'sticker' },
@@ -185,18 +175,18 @@ async function startBot() {
                                         const stream = await downloadContentFromMessage(mediaMessage, mapped.stream);
                                         let buffer = Buffer.from([]);
                                         for await (const chunk of stream) { buffer = Buffer.concat([buffer, chunk]); }
-                                        const captionText = `🗑️ *[ رادار الحذف: ${mapped.name} ]*\n\n» العضو: @${senderNum}\n» قام بحذف الميديا المرفقة أعلاه الحين!\n\n${footer}`;
+                                        const captionText = `🗑️ *[ رادار الحذف: ${mapped.name} ]*\n\n» العضو: @${senderNum}\n» قام بحذف الميديا أعلاه!\n\n${footer}`;
 
                                         if (mediaTypeKey === 'imageMessage') {
-                                            await sock.sendMessage(myBotPrivate, { image: buffer, caption: captionText, mentions: [sender] });
+                                            await sock.sendMessage(myBotPrivate, { image: buffer, caption: captionText, mentions: [oldMsgData.sender] });
                                         } else if (mediaTypeKey === 'stickerMessage') {
-                                            await sock.sendMessage(myBotPrivate, { text: `🗑️ *[ رادار الحذف: ملصق 🎭 ]*\n» العضو: @${senderNum}\n» الملصق المحذوف بالأسفل:`, mentions: [sender] });
+                                            await sock.sendMessage(myBotPrivate, { text: `🗑️ *[ رادار الحذف: ملصق 🎭 ]*\n» العضو: @${senderNum}`, mentions: [oldMsgData.sender] });
                                             await sock.sendMessage(myBotPrivate, { sticker: buffer });
                                         } else if (mediaTypeKey === 'audioMessage') {
-                                            await sock.sendMessage(myBotPrivate, { text: `🗑️ *[ رادار الحذف: ريكورد 🎵 ]*\n» العضو: @${senderNum}\n» الريكورد المحذوف بالأسفل:`, mentions: [sender] });
+                                            await sock.sendMessage(myBotPrivate, { text: `🗑️ *[ رادار الحذف: ريكورد 🎵 ]*\n» العضو: @${senderNum}`, mentions: [oldMsgData.sender] });
                                             await sock.sendMessage(myBotPrivate, { audio: buffer, mimetype: 'audio/mp4', ptt: mediaMessage.ptt });
                                         } else if (mediaTypeKey === 'videoMessage') {
-                                            await sock.sendMessage(myBotPrivate, { video: buffer, caption: captionText, mentions: [sender] });
+                                            await sock.sendMessage(myBotPrivate, { video: buffer, caption: captionText, mentions: [oldMsgData.sender] });
                                         }
                                     } catch (err) { console.log("خطأ تحميل ميديا محذوفة:", err.message); }
                                 }
@@ -206,10 +196,7 @@ async function startBot() {
                 }
             }
 
-            let body = '';
-            if (type === 'conversation') body = mek.message.conversation;
-            else if (type === 'extendedTextMessage') body = mek.message.extendedTextMessage.text;
-
+            let body = extractedText || '';
             body = body.trim();
             if (!body) return;
 
@@ -218,7 +205,6 @@ async function startBot() {
             const rawSender = mek.key.participant || mek.key.remoteJid || '';
             const senderNumber = rawSender.split("@")[0].replace(/[^0-9]/g, "");
 
-            // 👑 جدار فحص رتب الصلاحيات المطور 👑
             const currentAdmins = getAllowedAdmins();
             const isOwner = (senderNumber === SUPREME_OWNER || mek.key.fromMe === true);
             const isAdmin = currentAdmins.includes(senderNumber);
@@ -240,42 +226,39 @@ async function startBot() {
         } catch (e) { console.error(e); }
     });
 
-    // ✏️ 2. معالج حدث التعديلات المباشر (messages.update) المخصص لكشف تعديل الرسائل بدقة
+    // ✏️ رادار التعديل الشامل والمعزز (messages.update)
     sock.ev.on("messages.update", async (updates) => {
         try {
             if (isRadarOn() !== "on") return;
 
             for (const update of updates) {
-                const isEdited = update.update?.message?.protocolMessage?.type === 14 || update.update?.editedMessage;
-                if (isEdited) {
-                    const editedId = update.key.id;
-                    const oldMsg = msgStorage.get(editedId);
+                const msgId = update.key.id;
+                const oldData = msgStorage.get(msgId);
 
-                    const editedProto = update.update?.message?.protocolMessage?.editedMessage || update.update?.editedMessage?.message;
-                    const newText = editedProto?.conversation || 
-                                    editedProto?.extendedTextMessage?.text || 
-                                    editedProto?.imageMessage?.caption || 
-                                    editedProto?.videoMessage?.caption || '';
+                if (!oldData) continue;
 
-                    if (oldMsg && oldMsg.message && newText) {
-                        const oldType = Object.keys(oldMsg.message)[0];
-                        let oldText = oldType === 'conversation' ? oldMsg.message.conversation : 
-                                     (oldType === 'extendedTextMessage' ? oldMsg.message.extendedTextMessage.text : 
-                                     (oldMsg.message[oldType]?.caption || ''));
+                let newText = "";
+                if (update.update?.message) {
+                    const uMsg = update.update.message;
+                    const pMsg = uMsg.protocolMessage?.editedMessage;
+                    newText = pMsg?.conversation || pMsg?.extendedTextMessage?.text || pMsg?.imageMessage?.caption ||
+                              uMsg.conversation || uMsg.extendedTextMessage?.text || uMsg.imageMessage?.caption || "";
+                } else if (update.update?.editedMessage) {
+                    const eMsg = update.update.editedMessage.message;
+                    newText = eMsg?.conversation || eMsg?.extendedTextMessage?.text || eMsg?.imageMessage?.caption || "";
+                }
 
-                        const sender = oldMsg.key.participant || oldMsg.key.remoteJid;
-                        const senderNum = sender.split("@")[0];
+                if (newText && oldData.text && oldData.text !== newText) {
+                    const flags = ["🇲🇨","🇯🇵","🇸🇩","🇷🇺","🇨🇦","🇩🇪","🇰🇵","🇺🇸"];
+                    const randomFlag = flags[Math.floor(Math.random() * flags.length)];
+                    const footer = `> |  Ⓗ DARK ZENIN ᴏғғ ${randomFlag}`;
+                    const myBotPrivate = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                    const senderNum = oldData.sender.split("@")[0];
 
-                        if (oldText && oldText !== newText) {
-                            const flags = ["🇲🇨","🇯🇵","🇸🇩","🇷🇺","🇨🇦","🇩🇪","🇰🇵","🇺🇸"];
-                            const randomFlag = flags[Math.floor(Math.random() * flags.length)];
-                            const footer = `> |  Ⓗ DARK ZENIN ᴏғғ ${randomFlag}`;
-                            const myBotPrivate = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-
-                            const alertMsg = `✏️ *[ رادار قفش التعديل ]*\n\n» العضو: @${senderNum}\n\n❌ النص القديم:\n"${oldText}"\n\n✅ النص الجديد:\n"${newText}"\n\n${footer}`;
-                            await sock.sendMessage(myBotPrivate, { text: alertMsg, mentions: [sender] });
-                        }
-                    }
+                    const alertMsg = `✏️ *[ رادار قفش التعديل ]*\n\n» العضو: @${senderNum}\n\n❌ النص القديم:\n"${oldData.text}"\n\n✅ النص الجديد:\n"${newText}"\n\n${footer}`;
+                    
+                    await sock.sendMessage(myBotPrivate, { text: alertMsg, mentions: [oldData.sender] });
+                    msgStorage.set(msgId, { ...oldData, text: newText });
                 }
             }
         } catch (e) { console.error("خطأ في رادار التعديل:", e.message); }
