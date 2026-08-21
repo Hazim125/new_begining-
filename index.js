@@ -107,7 +107,7 @@ async function startBot() {
         if (update.connection === "close") startBot();
     });
 
-    // 1️⃣ استقبال الرسائل العادية وتخزينها لكشف الحذف والتعديل
+    // 📩 1. معالج استقبال الرسائل العادية فقط وتخزينها
     sock.ev.on("messages.upsert", async (chatUpdate) => {
         try {
             if (chatUpdate.type !== "notify") return;
@@ -117,16 +117,21 @@ async function startBot() {
             const msgId = mek.key.id;
             const type = Object.keys(mek.message)[0];
 
+            // شرط أساسي: منع استبدال أو حفظ رسائل التعديل داخل الذاكرة لحماية النص الأصلي
+            if (type === 'editedMessage' || mek.message.protocolMessage?.type === 14) return;
+
             let extractedText = type === 'conversation' ? mek.message.conversation :
                                (type === 'extendedTextMessage' ? mek.message.extendedTextMessage?.text :
                                (mek.message[type]?.caption || ''));
 
-            // حفظ الرسائل العادية في الذاكرة
-            msgStorage.set(msgId, {
-                text: extractedText,
-                sender: mek.key.participant || mek.key.remoteJid,
-                raw: mek
-            });
+            // حفظ الرسالة الأصلية فقط في الذاكرة
+            if (!msgStorage.has(msgId)) {
+                msgStorage.set(msgId, {
+                    text: extractedText,
+                    sender: mek.key.participant || mek.key.remoteJid,
+                    raw: mek
+                });
+            }
 
             if (msgStorage.size > 5000) {
                 const firstKey = msgStorage.keys().next().value;
@@ -139,7 +144,7 @@ async function startBot() {
                 const footer = `> |  Ⓗ DARK ZENIN ᴏғғ ${randomFlag}`;
                 const myBotPrivate = sock.user.id.split(':')[0] + '@s.whatsapp.net';
 
-                // 🗑️ رادار كشف الرسائل والميديا المحذوفة (Type 0)
+                // 🗑️ رادار كشف الرسائل والميديا المحذوفة
                 if (type === 'protocolMessage' && mek.message.protocolMessage?.type === 0) {
                     const deletedId = mek.message.protocolMessage.key.id;
                     const oldMsgData = msgStorage.get(deletedId);
@@ -225,23 +230,25 @@ async function startBot() {
         } catch (e) { console.error(e); }
     });
 
-    // 2️⃣ رادار قفش التعديل الحقيقي المباشر من حدث updates
+    // ✏️ 2. معالج التعديلات المصلح وفق المسار الدقيق في Baileys
     sock.ev.on("messages.update", async (updates) => {
         try {
             if (isRadarOn() !== "on") return;
 
             for (const update of updates) {
-                const proto = update.update?.message?.protocolMessage;
-                // التأكد من أن التحديث هو حدث تعديل (Type 14)
-                if (proto?.type === 14 || update.update?.editedMessage) {
-                    const targetId = proto?.key?.id || update.key.id;
-                    const oldData = msgStorage.get(targetId);
+                // استخراج الرسالة المعدلة مباشرة وفق المسار الصحيح
+                const editedMessage = update.update?.message?.editedMessage || update.update?.editedMessage;
+                
+                if (editedMessage) {
+                    const msgId = update.key.id;
+                    const oldData = msgStorage.get(msgId);
 
-                    const editedProto = proto?.editedMessage || update.update?.editedMessage?.message;
-                    const newText = editedProto?.conversation || 
-                                    editedProto?.extendedTextMessage?.text || 
-                                    editedProto?.imageMessage?.caption || 
-                                    editedProto?.videoMessage?.caption || '';
+                    // استخراج النص الجديد من كائن editedMessage المباشر
+                    const editedObj = editedMessage.message || editedMessage;
+                    const newText = editedObj?.conversation || 
+                                    editedObj?.extendedTextMessage?.text || 
+                                    editedObj?.imageMessage?.caption || 
+                                    editedObj?.videoMessage?.caption || '';
 
                     if (oldData && oldData.text && newText && oldData.text !== newText) {
                         const flags = ["🇲🇨","🇯🇵","🇸🇩","🇷🇺","🇨🇦","🇩🇪","🇰🇵","🇺🇸"];
@@ -253,8 +260,9 @@ async function startBot() {
                         const alertMsg = `✏️ *[ رادار قفش التعديل ]*\n\n» العضو: @${senderNum}\n\n❌ النص القديم:\n"${oldData.text}"\n\n✅ النص الجديد:\n"${newText}"\n\n${footer}`;
 
                         await sock.sendMessage(myBotPrivate, { text: alertMsg, mentions: [oldData.sender] });
-                        // تحديث النص في الذاكرة لمنع التكرار
-                        msgStorage.set(targetId, { ...oldData, text: newText });
+
+                        // تحديث الذاكرة بالنص الجديد بعد إرسال التنبيه لضمان عدم التكرار
+                        msgStorage.set(msgId, { ...oldData, text: newText });
                     }
                 }
             }
