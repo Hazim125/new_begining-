@@ -107,7 +107,7 @@ async function startBot() {
         if (update.connection === "close") startBot();
     });
 
-    // 📩 1. معالج استقبال الرسائل العادية فقط وتخزينها
+    // 📩 1. استقبال الرسائل وتخزين الحالة الأصلية والحالة المعدلة منفصلتين
     sock.ev.on("messages.upsert", async (chatUpdate) => {
         try {
             if (chatUpdate.type !== "notify") return;
@@ -117,17 +117,18 @@ async function startBot() {
             const msgId = mek.key.id;
             const type = Object.keys(mek.message)[0];
 
-            // شرط أساسي: منع استبدال أو حفظ رسائل التعديل داخل الذاكرة لحماية النص الأصلي
+            // تجاهل رسائل التعديل والبروتوكول في الذاكرة الرئيسية
             if (type === 'editedMessage' || mek.message.protocolMessage?.type === 14) return;
 
             let extractedText = type === 'conversation' ? mek.message.conversation :
                                (type === 'extendedTextMessage' ? mek.message.extendedTextMessage?.text :
                                (mek.message[type]?.caption || ''));
 
-            // حفظ الرسالة الأصلية فقط في الذاكرة
+            // تخزين الرسالة فقط إذا لم تكن موجودة سابقاً
             if (!msgStorage.has(msgId)) {
                 msgStorage.set(msgId, {
-                    text: extractedText,
+                    originalText: extractedText,
+                    currentText: extractedText,
                     sender: mek.key.participant || mek.key.remoteJid,
                     raw: mek
                 });
@@ -144,16 +145,17 @@ async function startBot() {
                 const footer = `> |  Ⓗ DARK ZENIN ᴏғғ ${randomFlag}`;
                 const myBotPrivate = sock.user.id.split(':')[0] + '@s.whatsapp.net';
 
-                // 🗑️ رادار كشف الرسائل والميديا المحذوفة
+                // 🗑️ رادار الحذف: يقرأ "currentText" (آخر نص وصل سواء معدل أم لا)
                 if (type === 'protocolMessage' && mek.message.protocolMessage?.type === 0) {
                     const deletedId = mek.message.protocolMessage.key.id;
                     const oldMsgData = msgStorage.get(deletedId);
 
                     if (oldMsgData) {
                         const senderNum = oldMsgData.sender.split("@")[0];
-                        
-                        if (oldMsgData.text) {
-                            const alertMsg = `🗑️ *[ رادار الحذف: نص ]*\n\n» العضو: @${senderNum}\n» حذف كلامه المكتوب:\n\n💬 "${oldMsgData.text}"\n\n${footer}`;
+                        const textToDelete = oldMsgData.currentText || oldMsgData.originalText;
+
+                        if (textToDelete) {
+                            const alertMsg = `🗑️ *[ رادار الحذف: نص ]*\n\n» العضو: @${senderNum}\n» حذف كلامه الحرفي الآن:\n\n💬 "${textToDelete}"\n\n${footer}`;
                             await sock.sendMessage(myBotPrivate, { text: alertMsg, mentions: [oldMsgData.sender] });
                         } else if (oldMsgData.raw?.message) {
                             const oldRaw = oldMsgData.raw.message;
@@ -230,40 +232,44 @@ async function startBot() {
         } catch (e) { console.error(e); }
     });
 
-    // ✏️ 2. معالج التعديلات المصلح وفق المسار الدقيق في Baileys
+    // ✏️ 2. رادار التعديل المطور بكشف شمول لكافة مسارات الأجهزة
     sock.ev.on("messages.update", async (updates) => {
         try {
             if (isRadarOn() !== "on") return;
 
             for (const update of updates) {
-                // استخراج الرسالة المعدلة مباشرة وفق المسار الصحيح
-                const editedMessage = update.update?.message?.editedMessage || update.update?.editedMessage;
-                
-                if (editedMessage) {
-                    const msgId = update.key.id;
-                    const oldData = msgStorage.get(msgId);
+                const msgId = update.key.id;
+                const oldData = msgStorage.get(msgId);
 
-                    // استخراج النص الجديد من كائن editedMessage المباشر
-                    const editedObj = editedMessage.message || editedMessage;
-                    const newText = editedObj?.conversation || 
-                                    editedObj?.extendedTextMessage?.text || 
-                                    editedObj?.imageMessage?.caption || 
-                                    editedObj?.videoMessage?.caption || '';
+                if (!oldData) continue;
 
-                    if (oldData && oldData.text && newText && oldData.text !== newText) {
-                        const flags = ["🇲🇨","🇯🇵","🇸🇩","🇷🇺","🇨🇦","🇩🇪","🇰🇵","🇺🇸"];
-                        const randomFlag = flags[Math.floor(Math.random() * flags.length)];
-                        const footer = `> |  Ⓗ DARK ZENIN ᴏғғ ${randomFlag}`;
-                        const myBotPrivate = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-                        const senderNum = oldData.sender.split("@")[0];
+                // استخراج النص الجديد بكافة الهياكل الممكنة (أندرويد / آيفون / ويب)
+                let newText = "";
+                const uMsg = update.update?.message;
+                const editedObj = uMsg?.editedMessage?.message || uMsg?.protocolMessage?.editedMessage || update.update?.editedMessage?.message || update.update?.editedMessage;
 
-                        const alertMsg = `✏️ *[ رادار قفش التعديل ]*\n\n» العضو: @${senderNum}\n\n❌ النص القديم:\n"${oldData.text}"\n\n✅ النص الجديد:\n"${newText}"\n\n${footer}`;
+                if (editedObj) {
+                    newText = editedObj?.conversation || 
+                              editedObj?.extendedTextMessage?.text || 
+                              editedObj?.imageMessage?.caption || 
+                              editedObj?.videoMessage?.caption || '';
+                }
 
-                        await sock.sendMessage(myBotPrivate, { text: alertMsg, mentions: [oldData.sender] });
+                // المقارنة بين النص القائم حالياً والنص الجديد
+                if (newText && oldData.currentText !== newText) {
+                    const flags = ["🇲🇨","🇯🇵","🇸🇩","🇷🇺","🇨🇦","🇩🇪","🇰🇵","🇺🇸"];
+                    const randomFlag = flags[Math.floor(Math.random() * flags.length)];
+                    const footer = `> |  Ⓗ DARK ZENIN ᴏғғ ${randomFlag}`;
+                    const myBotPrivate = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                    const senderNum = oldData.sender.split("@")[0];
 
-                        // تحديث الذاكرة بالنص الجديد بعد إرسال التنبيه لضمان عدم التكرار
-                        msgStorage.set(msgId, { ...oldData, text: newText });
-                    }
+                    const alertMsg = `✏️ *[ رادار قفش التعديل ]*\n\n» العضو: @${senderNum}\n\n❌ النص قبل التعديل:\n"${oldData.currentText}"\n\n✅ النص الجديد:\n"${newText}"\n\n${footer}`;
+
+                    await sock.sendMessage(myBotPrivate, { text: alertMsg, mentions: [oldData.sender] });
+
+                    // تحديث الحالة الحالية فقط لاستخدامها في الحذف لاحقاً، مع إبقاء originalText حياً
+                    oldData.currentText = newText;
+                    msgStorage.set(msgId, oldData);
                 }
             }
         } catch (e) { console.error("خطأ رادار التعديل:", e.message); }
