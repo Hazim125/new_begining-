@@ -57,6 +57,15 @@ function getRandomFlag() {
     return flags[Math.floor(Math.random() * flags.length)];
 }
 
+function extractTextFromMsg(msgObj) {
+    if (!msgObj) return '';
+    const type = Object.keys(msgObj)[0];
+    if (type === 'conversation') return msgObj.conversation || '';
+    if (type === 'extendedTextMessage') return msgObj.extendedTextMessage?.text || '';
+    if (msgObj[type]?.caption) return msgObj[type].caption;
+    return '';
+}
+
 function loadPlugins() {
     commands.clear();
     aliasesMap.clear();
@@ -112,7 +121,7 @@ async function startBot() {
         if (update.connection === "close") startBot();
     });
 
-    // 📩 1. استقبال الرسائل العادية ورادار الحذف
+    // 📩 1. استقبال الرسائل ورادار الحذف + التقاط protocolMessage نوع 14 للتعديلات
     sock.ev.on("messages.upsert", async (chatUpdate) => {
         try {
             if (chatUpdate.type !== "notify") return;
@@ -122,11 +131,36 @@ async function startBot() {
             const msgId = mek.key.id;
             const type = Object.keys(mek.message)[0];
 
-            let extractedText = type === 'conversation' ? mek.message.conversation :
-                               (type === 'extendedTextMessage' ? mek.message.extendedTextMessage?.text :
-                               (mek.message[type]?.caption || ''));
+            let extractedText = extractTextFromMsg(mek.message);
 
-            // حفظ الرسالة لأول مرة فقط
+            // 🛠️ فحص هل الرسالة القادمة هي protocolMessage من نوع 14 (تعديل رسالة)
+            if (type === 'protocolMessage') {
+                const proto = mek.message.protocolMessage;
+                // نوع 14 هو MESSAGE_EDIT في Baileys
+                if (proto?.type === 14 || proto?.editedMessage) {
+                    const editedMsgObj = proto.editedMessage || proto.message;
+                    const targetId = proto.key?.id || msgId;
+                    const record = msgStorage.get(targetId);
+                    
+                    const newText = extractTextFromMsg(editedMsgObj);
+                    if (record && newText) {
+                        record.currentText = newText;
+                        msgStorage.set(targetId, record);
+
+                        if (isRadarOn() === "on" && !mek.key.fromMe) {
+                            const senderNum = record.sender.split("@")[0];
+                            const myBotPrivate = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                            const footer = `> |  Ⓗ DARK ZENIN ᴏғғ ${getRandomFlag()}`;
+
+                            const alertMsg = `✏️ *[ رادار التعديل ]*\n\n» العضو: @${senderNum}\n» عدّل رسالته إلى:\n💬 "${newText}"\n\n${footer}`;
+                            await sock.sendMessage(myBotPrivate, { text: alertMsg, mentions: [record.sender] });
+                        }
+                    }
+                    return; // إنهاء المعالجة لأنها رسالة بروتوكول تعديل
+                }
+            }
+
+            // حفظ الرسالة الأصلية لأول مرة
             if (!msgStorage.has(msgId) && type !== 'protocolMessage') {
                 msgStorage.set(msgId, {
                     originalText: extractedText,
@@ -232,40 +266,29 @@ async function startBot() {
         } catch (e) { console.error(e); }
     });
 
-    // ✏️ 2. معالج التعديل المصلح بناءً على القراءة المباشرة لـ update.update.message
+    // ✏️ 2. معالج التعديلات الشامل لمختلف المسارات (Flexibility Handler)
     sock.ev.on("messages.update", async (updates) => {
         try {
             for (const update of updates) {
-                const newMessage = update.update?.message;
-                if (!newMessage) continue;
+                // فحص كافة الحالات والمسارات الممكنة للتعديل
+                const editedObj = update.update?.message?.editedMessage 
+                               || update.message?.editedMessage 
+                               || update.update?.message?.protocolMessage?.editedMessage
+                               || update.update?.message;
 
-                const targetId = update.key.id;
+                if (!editedObj) continue;
+
+                const targetId = update.update?.message?.protocolMessage?.key?.id || update.key?.id;
                 const record = msgStorage.get(targetId);
                 if (!record) continue;
 
-                // استخراج النص الجديد بجميع الأنواع
-                let newText = '';
-                const type = Object.keys(newMessage)[0];
-                if (type === 'conversation') {
-                    newText = newMessage.conversation;
-                } else if (type === 'extendedTextMessage') {
-                    newText = newMessage.extendedTextMessage?.text || '';
-                } else if (type === 'imageMessage') {
-                    newText = newMessage.imageMessage?.caption || '';
-                } else if (type === 'videoMessage') {
-                    newText = newMessage.videoMessage?.caption || '';
-                } else if (type === 'documentMessage') {
-                    newText = newMessage.documentMessage?.caption || '';
-                } else if (type === 'audioMessage') {
-                    newText = newMessage.audioMessage?.caption || '';
-                }
+                const innerMsg = editedObj.message || editedObj;
+                const newText = extractTextFromMsg(innerMsg);
 
                 if (newText && record.currentText !== newText) {
-                    // تحديث التخزين بالنص الجديد
                     record.currentText = newText;
                     msgStorage.set(targetId, record);
 
-                    // إرسال إشعار التعديل إذا كان الرادار مفاعلاً وليست رسالة البوت
                     if (isRadarOn() === "on" && !update.key.fromMe) {
                         const senderNum = record.sender.split("@")[0];
                         const myBotPrivate = sock.user.id.split(':')[0] + '@s.whatsapp.net';
