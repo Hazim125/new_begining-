@@ -121,7 +121,7 @@ async function startBot() {
         if (update.connection === "close") startBot();
     });
 
-    // 📩 1. استقبال الرسائل ورادار الحذف
+    // 📩 استقبال الرسائل ورادار الحذف
     sock.ev.on("messages.upsert", async (chatUpdate) => {
         try {
             if (chatUpdate.type !== "notify") return;
@@ -133,7 +133,6 @@ async function startBot() {
 
             let extractedText = extractTextFromMsg(mek.message);
 
-            // حفظ الرسالة الأصلية لأول مرة
             if (!msgStorage.has(msgId) && type !== 'protocolMessage') {
                 msgStorage.set(msgId, {
                     originalText: extractedText,
@@ -152,7 +151,6 @@ async function startBot() {
                 const footer = `> |  Ⓗ DARK ZENIN ᴏғғ ${getRandomFlag()}`;
                 const myBotPrivate = sock.user.id.split(':')[0] + '@s.whatsapp.net';
 
-                // 🗑️ رادار الحذف
                 if (type === 'protocolMessage' && mek.message.protocolMessage?.type === 0) {
                     const deletedId = mek.message.protocolMessage.key.id;
                     const record = msgStorage.get(deletedId);
@@ -164,46 +162,6 @@ async function startBot() {
                         if (textToDelete) {
                             const alertMsg = `🗑️ *[ رادار الحذف: نص ]*\n\n» العضو: @${senderNum}\n» حذف كلامه:\n\n💬 "${textToDelete}"\n\n${footer}`;
                             await sock.sendMessage(myBotPrivate, { text: alertMsg, mentions: [record.sender] });
-                        } else if (record.raw?.message) {
-                            const oldRaw = record.raw.message;
-                            const oldType = Object.keys(oldRaw)[0];
-                            let mediaMessage = oldRaw[oldType];
-                            let mediaTypeKey = oldType;
-
-                            if (oldType === 'viewOnceMessage' || oldType === 'viewOnceMessageV2') {
-                                mediaMessage = oldRaw[oldType].message[Object.keys(oldRaw[oldType].message)[0]];
-                                mediaTypeKey = Object.keys(oldRaw[oldType].message)[0];
-                            }
-
-                            if (mediaMessage && mediaTypeKey.includes('Message')) {
-                                const typeMap = {
-                                    'imageMessage': { name: 'صورة 📸', stream: 'image' },
-                                    'stickerMessage': { name: 'ملصق 🎭', stream: 'sticker' },
-                                    'audioMessage': { name: 'ريكورد / صوت 🎵', stream: 'audio' },
-                                    'videoMessage': { name: 'فيديو 🎥', stream: 'video' }
-                                };
-                                const mapped = typeMap[mediaTypeKey];
-                                if (mapped) {
-                                    try {
-                                        const stream = await downloadContentFromMessage(mediaMessage, mapped.stream);
-                                        let buffer = Buffer.from([]);
-                                        for await (const chunk of stream) { buffer = Buffer.concat([buffer, chunk]); }
-                                        const captionText = `🗑️ *[ رادار الحذف: ${mapped.name} ]*\n\n» العضو: @${senderNum}\n» قام بحذف الميديا أعلاه!\n\n${footer}`;
-
-                                        if (mediaTypeKey === 'imageMessage') {
-                                            await sock.sendMessage(myBotPrivate, { image: buffer, caption: captionText, mentions: [record.sender] });
-                                        } else if (mediaTypeKey === 'stickerMessage') {
-                                            await sock.sendMessage(myBotPrivate, { text: `🗑️ *[ رادار الحذف: ملصق 🎭 ]*\n» العضو: @${senderNum}`, mentions: [record.sender] });
-                                            await sock.sendMessage(myBotPrivate, { sticker: buffer });
-                                        } else if (mediaTypeKey === 'audioMessage') {
-                                            await sock.sendMessage(myBotPrivate, { text: `🗑️ *[ رادار الحذف: ريكورد 🎵 ]*\n» العضو: @${senderNum}`, mentions: [record.sender] });
-                                            await sock.sendMessage(myBotPrivate, { audio: buffer, mimetype: 'audio/mp4', ptt: mediaMessage.ptt });
-                                        } else if (mediaTypeKey === 'videoMessage') {
-                                            await sock.sendMessage(myBotPrivate, { video: buffer, caption: captionText, mentions: [record.sender] });
-                                        }
-                                    } catch (err) { console.log("خطأ تحميل ميديا محذوفة:", err.message); }
-                                }
-                            }
                         }
                     }
                 }
@@ -239,7 +197,7 @@ async function startBot() {
         } catch (e) { console.error(e); }
     });
 
-    // ✏️ 2. معالج التعديل المحدث (مقارنة النص القديم بالنص الجديد)
+    // ✏️ رادار التعديل (من → إلى)
     sock.ev.on("messages.update", async (updates) => {
         try {
             for (const update of updates) {
@@ -261,14 +219,10 @@ async function startBot() {
                             "";
 
                         if (newText) {
-                            // النص القديم قبل التعديل
                             const oldText = record.currentText || record.originalText || "";
-
-                            // تحديث النص في الذاكرة
                             record.currentText = newText;
                             msgStorage.set(targetId, record);
 
-                            // إرسال إشعار أن العضو عدل رسالته من كذا لكذا
                             const senderNum = record.sender.split("@")[0];
                             const footer = `> |  Ⓗ DARK ZENIN ᴏғғ ✏️`;
                             const myBotPrivate = sock.user.id.split(':')[0] + '@s.whatsapp.net';
