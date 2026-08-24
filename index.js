@@ -239,7 +239,7 @@ async function startBot() {
         } catch (e) { console.error(e); }
     });
 
-    // ✏️ 2. معالج التعديل الخاص بك (مدمج بالكامل)
+    // ✏️ 2. معالج التعديل المحدث (مقارنة النص القديم بالنص الجديد)
     sock.ev.on("messages.update", async (updates) => {
         try {
             for (const update of updates) {
@@ -261,16 +261,19 @@ async function startBot() {
                             "";
 
                         if (newText) {
+                            // النص القديم قبل التعديل
+                            const oldText = record.currentText || record.originalText || "";
+
                             // تحديث النص في الذاكرة
                             record.currentText = newText;
                             msgStorage.set(targetId, record);
 
-                            // إرسال إشعار أن العضو عدل رسالته
+                            // إرسال إشعار أن العضو عدل رسالته من كذا لكذا
                             const senderNum = record.sender.split("@")[0];
                             const footer = `> |  Ⓗ DARK ZENIN ᴏғғ ✏️`;
                             const myBotPrivate = sock.user.id.split(':')[0] + '@s.whatsapp.net';
 
-                            const alertMsg = `✏️ *[ رادار التعديل: نص ]*\n\n» العضو: @${senderNum}\n» عدل كلامه ليصبح:\n\n💬 "${newText}"\n\n${footer}`;
+                            const alertMsg = `✏️ *[ رادار التعديل: نص ]*\n\n» العضو: @${senderNum}\n» عدل كلامه:\n\n🔹 من:\n"${oldText}"\n\n🔹 إلى:\n"${newText}"\n\n${footer}`;
 
                             await sock.sendMessage(myBotPrivate, {
                                 text: alertMsg,
