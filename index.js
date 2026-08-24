@@ -17,7 +17,7 @@ const BOT_NAME = "DARK";
 const commands = new Map();
 const aliasesMap = new Map();
 
-// --- 📂 نظام التخزين الدائم للرسائل (الخطوة 2) ---
+// --- 📂 قاعدة بيانات الرسائل ---
 const dbPath = path.join(__dirname, "messages_db.json");
 
 function loadDb() {
@@ -31,7 +31,6 @@ function loadDb() {
 
 function saveDb(data) {
     try {
-        // الحفاظ على آخر 3000 رسالة فقط لمنع تضخم حجم الملف
         const keys = Object.keys(data);
         if (keys.length > 3000) {
             const keysToDelete = keys.slice(0, keys.length - 3000);
@@ -39,7 +38,7 @@ function saveDb(data) {
         }
         fs.writeFileSync(dbPath, JSON.stringify(data, null, 2));
     } catch (e) {
-        console.error("خطأ في حفظ قاعدة بيانات الرسائل:", e.message);
+        console.error("خطأ في حفظ قاعدة البيانات:", e.message);
     }
 }
 
@@ -141,7 +140,38 @@ async function startBot() {
         if (update.connection === "close") startBot();
     });
 
-    // 📩 معالجة الرسائل والتعديلات والحذف
+    // 1️⃣ الاستماع الخاص بالتعديلات عبر messages.update (الحل المباشر للتعديل)
+    sock.ev.on("messages.update", async (updates) => {
+        for (const update of updates) {
+            if (update.update?.message) {
+                const targetId = update.key.id;
+                const record = msgStorage[targetId];
+
+                if (record && isRadarOn() === "on" && !update.key.fromMe) {
+                    const newText = extractTextFromMsg(update.update.message);
+                    const oldText = record.currentText || record.originalText || "";
+
+                    if (newText && oldText && oldText !== newText) {
+                        msgStorage[targetId].currentText = newText;
+                        saveDb(msgStorage);
+
+                        const myBotPrivate = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                        const footer = `> |  Ⓗ DARK ZENIN ᴏғғ ${getRandomFlag()}`;
+                        const senderNum = record.sender.split("@")[0];
+
+                        const alertMsg = `✏️ *[ رادار التعديل: نص ]*\n\n» العضو: @${senderNum}\n\n🔹 **قبل التعديل:**\n"${oldText}"\n\n🔹 **بعد التعديل:**\n"${newText}"\n\n${footer}`;
+
+                        await sock.sendMessage(myBotPrivate, {
+                            text: alertMsg,
+                            mentions: [record.sender]
+                        });
+                    }
+                }
+            }
+        }
+    });
+
+    // 2️⃣ استقبال الرسائل والحذف والأوامر
     sock.ev.on("messages.upsert", async (chatUpdate) => {
         try {
             if (chatUpdate.type !== "notify") return;
@@ -153,7 +183,7 @@ async function startBot() {
             const myBotPrivate = sock.user.id.split(':')[0] + '@s.whatsapp.net';
             const footer = `> |  Ⓗ DARK ZENIN ᴏғғ ${getRandomFlag()}`;
 
-            // 1️⃣ التقاط واستلام الرسالة الأصلية وتخزينها
+            // حفظ الرسائل الجديدة
             let extractedText = extractTextFromMsg(mek.message);
             if (!msgStorage[msgId] && type !== 'protocolMessage') {
                 msgStorage[msgId] = {
@@ -164,34 +194,8 @@ async function startBot() {
                 saveDb(msgStorage);
             }
 
-            // 2️⃣ استقبال إشعار التعديل، المطابقة والمقارنة، ثم إرسال التنبيه
+            // رادار الحذف
             const protocolMsg = mek.message.protocolMessage;
-            if (type === 'protocolMessage' && (protocolMsg?.type === 14 || protocolMsg?.editedMessage)) {
-                const editedMsgObj = protocolMsg.editedMessage;
-                const targetId = protocolMsg.key?.id;
-                const newText = extractTextFromMsg(editedMsgObj);
-
-                const record = msgStorage[targetId];
-                if (record && isRadarOn() === "on" && !mek.key.fromMe) {
-                    const oldText = record.currentText || record.originalText || "";
-                    if (newText && oldText && oldText !== newText) {
-                        // تحديث النص الجديد داخل الملف
-                        msgStorage[targetId].currentText = newText;
-                        saveDb(msgStorage);
-
-                        const senderNum = record.sender.split("@")[0];
-                        const alertMsg = `✏️ *[ رادار التعديل: نص ]*\n\n» العضو: @${senderNum}\n\n🔹 **قبل التعديل:**\n"${oldText}"\n\n🔹 **بعد التعديل:**\n"${newText}"\n\n${footer}`;
-
-                        await sock.sendMessage(myBotPrivate, {
-                            text: alertMsg,
-                            mentions: [record.sender]
-                        });
-                    }
-                }
-                return;
-            }
-
-            // 3️⃣ رادار الحذف
             if (type === 'protocolMessage' && protocolMsg?.type === 0) {
                 if (isRadarOn() === "on" && !mek.key.fromMe) {
                     const deletedId = protocolMsg.key?.id;
@@ -210,7 +214,7 @@ async function startBot() {
                 return;
             }
 
-            // 4️⃣ تشغيل الأوامر
+            // تشغيل الأوامر
             let body = extractedText || '';
             body = body.trim();
             if (!body) return;
