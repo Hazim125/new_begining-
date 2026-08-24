@@ -121,7 +121,7 @@ async function startBot() {
         if (update.connection === "close") startBot();
     });
 
-    // 📩 1. استقبال الرسائل ورادار الحذف + التقاط protocolMessage نوع 14 للتعديلات
+    // 📩 1. استقبال الرسائل ورادار الحذف
     sock.ev.on("messages.upsert", async (chatUpdate) => {
         try {
             if (chatUpdate.type !== "notify") return;
@@ -132,33 +132,6 @@ async function startBot() {
             const type = Object.keys(mek.message)[0];
 
             let extractedText = extractTextFromMsg(mek.message);
-
-            // 🛠️ فحص هل الرسالة القادمة هي protocolMessage من نوع 14 (تعديل رسالة)
-            if (type === 'protocolMessage') {
-                const proto = mek.message.protocolMessage;
-                // نوع 14 هو MESSAGE_EDIT في Baileys
-                if (proto?.type === 14 || proto?.editedMessage) {
-                    const editedMsgObj = proto.editedMessage || proto.message;
-                    const targetId = proto.key?.id || msgId;
-                    const record = msgStorage.get(targetId);
-                    
-                    const newText = extractTextFromMsg(editedMsgObj);
-                    if (record && newText) {
-                        record.currentText = newText;
-                        msgStorage.set(targetId, record);
-
-                        if (isRadarOn() === "on" && !mek.key.fromMe) {
-                            const senderNum = record.sender.split("@")[0];
-                            const myBotPrivate = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-                            const footer = `> |  Ⓗ DARK ZENIN ᴏғғ ${getRandomFlag()}`;
-
-                            const alertMsg = `✏️ *[ رادار التعديل ]*\n\n» العضو: @${senderNum}\n» عدّل رسالته إلى:\n💬 "${newText}"\n\n${footer}`;
-                            await sock.sendMessage(myBotPrivate, { text: alertMsg, mentions: [record.sender] });
-                        }
-                    }
-                    return; // إنهاء المعالجة لأنها رسالة بروتوكول تعديل
-                }
-            }
 
             // حفظ الرسالة الأصلية لأول مرة
             if (!msgStorage.has(msgId) && type !== 'protocolMessage') {
@@ -266,44 +239,49 @@ async function startBot() {
         } catch (e) { console.error(e); }
     });
 
-    // ✏️ 2. معالج التعديلات الشامل لمختلف المسارات (Flexibility Handler)
+    // ✏️ 2. معالج التعديل الخاص بك (مدمج بالكامل)
     sock.ev.on("messages.update", async (updates) => {
         try {
             for (const update of updates) {
-                // فحص كافة الحالات والمسارات الممكنة للتعديل
-                const editedObj = update.update?.message?.editedMessage 
-                               || update.message?.editedMessage 
-                               || update.update?.message?.protocolMessage?.editedMessage
-                               || update.update?.message;
+                const edited =
+                    update.update?.message?.editedMessage ||
+                    update.message?.editedMessage ||
+                    (update.update?.message?.protocolMessage?.editedMessage);
 
-                if (!editedObj) continue;
+                if (edited) {
+                    const targetId = update.key?.id || update.update?.key?.id;
+                    const record = msgStorage.get(targetId);
 
-                const targetId = update.update?.message?.protocolMessage?.key?.id || update.key?.id;
-                const record = msgStorage.get(targetId);
-                if (!record) continue;
+                    if (record) {
+                        const newText =
+                            edited.message?.conversation ||
+                            edited.message?.extendedTextMessage?.text ||
+                            edited.message?.imageMessage?.caption ||
+                            edited.message?.videoMessage?.caption ||
+                            "";
 
-                const innerMsg = editedObj.message || editedObj;
-                const newText = extractTextFromMsg(innerMsg);
+                        if (newText) {
+                            // تحديث النص في الذاكرة
+                            record.currentText = newText;
+                            msgStorage.set(targetId, record);
 
-                if (newText && record.currentText !== newText) {
-                    record.currentText = newText;
-                    msgStorage.set(targetId, record);
+                            // إرسال إشعار أن العضو عدل رسالته
+                            const senderNum = record.sender.split("@")[0];
+                            const footer = `> |  Ⓗ DARK ZENIN ᴏғғ ✏️`;
+                            const myBotPrivate = sock.user.id.split(':')[0] + '@s.whatsapp.net';
 
-                    if (isRadarOn() === "on" && !update.key.fromMe) {
-                        const senderNum = record.sender.split("@")[0];
-                        const myBotPrivate = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-                        const footer = `> |  Ⓗ DARK ZENIN ᴏғғ ${getRandomFlag()}`;
+                            const alertMsg = `✏️ *[ رادار التعديل: نص ]*\n\n» العضو: @${senderNum}\n» عدل كلامه ليصبح:\n\n💬 "${newText}"\n\n${footer}`;
 
-                        const alertMsg = `✏️ *[ رادار التعديل ]*\n\n» العضو: @${senderNum}\n» عدّل رسالته إلى:\n💬 "${newText}"\n\n${footer}`;
-                        await sock.sendMessage(myBotPrivate, {
-                            text: alertMsg,
-                            mentions: [record.sender]
-                        });
+                            await sock.sendMessage(myBotPrivate, {
+                                text: alertMsg,
+                                mentions: [record.sender]
+                            });
+                        }
                     }
                 }
             }
         } catch (e) {
-            console.error("خطأ في معالج التعديل:", e.message);
+            console.error("خطأ تحديث التعديل:", e.message);
         }
     });
 }
