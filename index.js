@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, downloadMediaMessage } = require("@whiskeysockets/baileys");
 const pino = require("pino");
 const fs = require("fs");
 const path = require("path");
@@ -17,29 +17,23 @@ const BOT_NAME = "DARK";
 const commands = new Map();
 const aliasesMap = new Map();
 
-// --- 📂 قاعدة بيانات الرسائل ---
+// --- 📂 قاعدة بيانات الرسائل المحفوظة ---
 const dbPath = path.join(__dirname, "messages_db.json");
 
 function loadDb() {
     if (!fs.existsSync(dbPath)) return {};
-    try {
-        return JSON.parse(fs.readFileSync(dbPath, "utf8"));
-    } catch {
-        return {};
-    }
+    try { return JSON.parse(fs.readFileSync(dbPath, "utf8")); } catch { return {}; }
 }
 
 function saveDb(data) {
     try {
         const keys = Object.keys(data);
-        if (keys.length > 3000) {
-            const keysToDelete = keys.slice(0, keys.length - 3000);
+        if (keys.length > 2000) {
+            const keysToDelete = keys.slice(0, keys.length - 2000);
             keysToDelete.forEach(k => delete data[k]);
         }
         fs.writeFileSync(dbPath, JSON.stringify(data, null, 2));
-    } catch (e) {
-        console.error("خطأ في حفظ قاعدة البيانات:", e.message);
-    }
+    } catch (e) { console.error("خطأ حفظ قاعدة البيانات:", e.message); }
 }
 
 const msgStorage = loadDb();
@@ -116,11 +110,17 @@ async function startBot() {
         printQRInTerminal: false,
         logger: pino({ level: "silent" }),
         version,
-        browser: ["Ubuntu", "Chrome", "20.0.0.4"]
+        browser: ["Ubuntu", "Chrome", "20.0.0.4"],
+        getMessage: async (key) => {
+            if (msgStorage[key.id]) {
+                return msgStorage[key.id].rawMessage || { conversation: msgStorage[key.id].currentText };
+            }
+            return { conversation: '' };
+        }
     });
 
     if (!sock.authState.creds.registered) {
-        console.log(`\n👑 نظام ربط DARK BOT المطور عبر الكود 👑`);
+        console.log(`\n👑 نظام ربط DARK BOT المطور 👑`);
         let phoneNumber = await question('📝 أدخل رقم هاتف البوت مع رمز الدولة: ');
         phoneNumber = phoneNumber.replace(/[^0-9]/g, '');
         if (!phoneNumber) process.exit(0);
@@ -136,11 +136,121 @@ async function startBot() {
 
     sock.ev.on("creds.update", saveCreds);
     sock.ev.on("connection.update", (update) => {
-        if (update.connection === "open") console.log(`\n✅ كينج دِارك! رادار الفضائح الدائم نشط الحين!`);
+        if (update.connection === "open") console.log(`\n✅ رادار الفضائح الدائم للوسائط والتعديلات يعمل بنجاح!`);
         if (update.connection === "close") startBot();
     });
 
-    // 1️⃣ الاستماع الخاص بالتعديلات عبر messages.update (الحل المباشر للتعديل)
+    // 1️⃣ التقاط وتخزين الرسائل الواردة بجميع أنواعها
+    sock.ev.on("messages.upsert", async (chatUpdate) => {
+        try {
+            if (chatUpdate.type !== "notify") return;
+            const mek = chatUpdate.messages[0];
+            if (!mek.message) return;
+
+            const msgId = mek.key.id;
+            const type = Object.keys(mek.message)[0];
+            const myBotPrivate = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+            const footer = `> |  Ⓗ DARK ZENIN ᴏғғ ${getRandomFlag()}`;
+
+            // تخزين الرسالة كاملة لاسترجاع الوسائط والتعديلات لاحقاً
+            if (!msgStorage[msgId] && type !== 'protocolMessage') {
+                msgStorage[msgId] = {
+                    rawMessage: mek.message,
+                    originalText: extractTextFromMsg(mek.message),
+                    currentText: extractTextFromMsg(mek.message),
+                    type: type,
+                    sender: mek.key.participant || mek.key.remoteJid
+                };
+                saveDb(msgStorage);
+            }
+
+            // --- رادار الحذف (للنصوص والوسائط: صور، فيديو، ريكورد) ---
+            const protocolMsg = mek.message.protocolMessage;
+            if (type === 'protocolMessage' && protocolMsg?.type === 0) {
+                if (isRadarOn() === "on" && !mek.key.fromMe) {
+                    const deletedId = protocolMsg.key?.id;
+                    const record = msgStorage[deletedId];
+
+                    if (record) {
+                        const senderNum = record.sender.split("@")[0];
+                        const mType = record.type;
+
+                        // 🔴 حالة حذف الوسائط (صورة / فيديو / صوت)
+                        if (['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage', 'stickerMessage'].includes(mType)) {
+                            try {
+                                const buffer = await downloadMediaMessage(
+                                    { message: record.rawMessage, key: { id: deletedId } },
+                                    'buffer',
+                                    {},
+                                    { logger: pino({ level: 'silent' }), reuploadRequest: sock.updateMediaMessage }
+                                );
+
+                                const captionText = record.rawMessage[mType]?.caption || '';
+                                let mediaTypeLabel = 'وسائط';
+                                if (mType === 'imageMessage') mediaTypeLabel = 'صورة 🖼️';
+                                if (mType === 'videoMessage') mediaTypeLabel = 'فيديو 🎥';
+                                if (mType === 'audioMessage') mediaTypeLabel = 'تسجيل صوتي 🎙️';
+
+                                const alertMsg = `🗑️ *[ رادار الحذف: ${mediaTypeLabel} ]*\n\n» العضو: @${senderNum}\n${captionText ? `» الوصف: "${captionText}"\n` : ''}\n${footer}`;
+
+                                if (mType === 'imageMessage') {
+                                    await sock.sendMessage(myBotPrivate, { image: buffer, caption: alertMsg, mentions: [record.sender] });
+                                } else if (mType === 'videoMessage') {
+                                    await sock.sendMessage(myBotPrivate, { video: buffer, caption: alertMsg, mentions: [record.sender] });
+                                } else if (mType === 'audioMessage') {
+                                    await sock.sendMessage(myBotPrivate, { text: alertMsg, mentions: [record.sender] });
+                                    await sock.sendMessage(myBotPrivate, { audio: buffer, ptt: true, mimetype: 'audio/mp4' });
+                                } else {
+                                    await sock.sendMessage(myBotPrivate, { document: buffer, caption: alertMsg, mimetype: 'application/octet-stream', fileName: 'deleted_file' });
+                                }
+                            } catch (e) {
+                                console.error("فشل تحريش ملف الوسائط المحذوف:", e.message);
+                            }
+                        } 
+                        // 🔴 حالة حذف نص عادي
+                        else {
+                            const textToDelete = record.currentText || record.originalText;
+                            if (textToDelete) {
+                                const alertMsg = `🗑️ *[ رادار الحذف: نص ]*\n\n» العضو: @${senderNum}\n» حذف كلامه:\n\n💬 "${textToDelete}"\n\n${footer}`;
+                                await sock.sendMessage(myBotPrivate, { text: alertMsg, mentions: [record.sender] });
+                            }
+                        }
+                    }
+                }
+                return;
+            }
+
+            // تشغيل الأوامر الاعتيادية
+            let body = extractTextFromMsg(mek.message).trim();
+            if (!body) return;
+
+            const args = body.split(/ +/);
+            const lookupName = args.shift().toLowerCase();
+            const rawSender = mek.key.participant || mek.key.remoteJid || '';
+            const senderNumber = rawSender.split("@")[0].replace(/[^0-9]/g, "");
+
+            const currentAdmins = getAllowedAdmins();
+            const isOwner = (senderNumber === SUPREME_OWNER || mek.key.fromMe === true);
+            const isAdmin = currentAdmins.includes(senderNumber);
+
+            const currentMode = getBotMode();
+            if (currentMode === "self" && !isAdmin && !isOwner) return;
+
+            const command = commands.get(lookupName) || aliasesMap.get(lookupName);
+            if (command) {
+                const hasPermission = isOwner || isAdmin;
+                await command.execute(sock, mek, args, {
+                    BOT_NAME,
+                    lookupName,
+                    isOwner: hasPermission,
+                    isAdmin,
+                    currentAdmins
+                });
+            }
+        } catch (e) { console.error("Error in upsert:", e); }
+    });
+
+    // 2️⃣ رادار التعديلات عبر messages.update
     sock.ev.on("messages.update", async (updates) => {
         for (const update of updates) {
             if (update.update?.message) {
@@ -169,80 +279,6 @@ async function startBot() {
                 }
             }
         }
-    });
-
-    // 2️⃣ استقبال الرسائل والحذف والأوامر
-    sock.ev.on("messages.upsert", async (chatUpdate) => {
-        try {
-            if (chatUpdate.type !== "notify") return;
-            const mek = chatUpdate.messages[0];
-            if (!mek.message) return;
-
-            const msgId = mek.key.id;
-            const type = Object.keys(mek.message)[0];
-            const myBotPrivate = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-            const footer = `> |  Ⓗ DARK ZENIN ᴏғғ ${getRandomFlag()}`;
-
-            // حفظ الرسائل الجديدة
-            let extractedText = extractTextFromMsg(mek.message);
-            if (!msgStorage[msgId] && type !== 'protocolMessage') {
-                msgStorage[msgId] = {
-                    originalText: extractedText,
-                    currentText: extractedText,
-                    sender: mek.key.participant || mek.key.remoteJid
-                };
-                saveDb(msgStorage);
-            }
-
-            // رادار الحذف
-            const protocolMsg = mek.message.protocolMessage;
-            if (type === 'protocolMessage' && protocolMsg?.type === 0) {
-                if (isRadarOn() === "on" && !mek.key.fromMe) {
-                    const deletedId = protocolMsg.key?.id;
-                    const record = msgStorage[deletedId];
-
-                    if (record) {
-                        const senderNum = record.sender.split("@")[0];
-                        const textToDelete = record.currentText || record.originalText;
-
-                        if (textToDelete) {
-                            const alertMsg = `🗑️ *[ رادار الحذف: نص ]*\n\n» العضو: @${senderNum}\n» حذف كلامه:\n\n💬 "${textToDelete}"\n\n${footer}`;
-                            await sock.sendMessage(myBotPrivate, { text: alertMsg, mentions: [record.sender] });
-                        }
-                    }
-                }
-                return;
-            }
-
-            // تشغيل الأوامر
-            let body = extractedText || '';
-            body = body.trim();
-            if (!body) return;
-
-            const args = body.split(/ +/);
-            const lookupName = args.shift().toLowerCase();
-            const rawSender = mek.key.participant || mek.key.remoteJid || '';
-            const senderNumber = rawSender.split("@")[0].replace(/[^0-9]/g, "");
-
-            const currentAdmins = getAllowedAdmins();
-            const isOwner = (senderNumber === SUPREME_OWNER || mek.key.fromMe === true);
-            const isAdmin = currentAdmins.includes(senderNumber);
-
-            const currentMode = getBotMode();
-            if (currentMode === "self" && !isAdmin && !isOwner) return;
-
-            const command = commands.get(lookupName) || aliasesMap.get(lookupName);
-            if (command) {
-                const hasPermission = isOwner || isAdmin;
-                await command.execute(sock, mek, args, {
-                    BOT_NAME,
-                    lookupName,
-                    isOwner: hasPermission,
-                    isAdmin,
-                    currentAdmins
-                });
-            }
-        } catch (e) { console.error("Error in upsert:", e); }
     });
 }
 
